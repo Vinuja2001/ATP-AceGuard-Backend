@@ -9,7 +9,7 @@ from tensorflow.keras.layers import Multiply
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000"}})
 
 
 class Attention(tf.keras.layers.Layer):
@@ -18,12 +18,8 @@ class Attention(tf.keras.layers.Layer):
         self.supports_masking = True
 
     def build(self, input_shape):
-        self.W = self.add_weight(shape=(input_shape[-1], 1),
-                                 initializer="random_normal",
-                                 trainable=True)
-        self.b = self.add_weight(shape=(1,),
-                                 initializer="zeros",
-                                 trainable=True)
+        self.W = self.add_weight(shape=(input_shape[-1], 1), initializer="random_normal", trainable=True)
+        self.b = self.add_weight(shape=(1,), initializer="zeros", trainable=True)
         super(Attention, self).build(input_shape)
 
     def call(self, inputs):
@@ -32,40 +28,30 @@ class Attention(tf.keras.layers.Layer):
         return Multiply()([inputs, attention_weights])
 
     def get_config(self):
-        base_config = super(Attention, self).get_config()
-        return base_config
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)
+        return super(Attention, self).get_config()
 
 
-# Load Model with Custom Layer
 MODEL_PATH = "model1.keras"
-
+model = None
 try:
     model = tf.keras.models.load_model(MODEL_PATH, custom_objects={"Attention": Attention})
-    # model.summary()
     print("✅ Model loaded successfully")
 except Exception as e:
     print(f"❌ Error loading model: {e}")
-    exit(1)
 
-# Rest of your Flask application code remains the same
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 pose = mp_pose.Pose()
 
 
-def extract_pose_keypoints(img_array):
-    img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
-    results = pose.process(img_rgb)
-
-    if results.pose_landmarks:
-        keypoints = np.array(
-            [val for landmark in results.pose_landmarks.landmark for val in (landmark.x, landmark.y, landmark.z)]
-        )
-        return keypoints
+def extract_pose_keypoints(img):
+    try:
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        results = pose.process(img_rgb)
+        if results.pose_landmarks:
+            return np.array([val for lm in results.pose_landmarks.landmark for val in (lm.x, lm.y, lm.z)])
+    except Exception as e:
+        print(f"Error extracting keypoints: {e}")
     return None
 
 
@@ -76,17 +62,19 @@ def analyze_image():
             return jsonify({"error": "No image uploaded"}), 400
 
         file = request.files["image"]
-        img_array = np.frombuffer(file.read(), np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        file_bytes = np.frombuffer(file.read(), np.uint8)
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+        if img is None:
+            return jsonify({"error": "Invalid image format"}), 400
 
         keypoints = extract_pose_keypoints(img)
         if keypoints is None:
-            return jsonify({"error": "No keypoints found in image"}), 400
+            return jsonify({"error": "No keypoints detected in image"}), 400
 
         keypoints = keypoints.reshape(1, -1)
         prediction = model.predict(keypoints)[0][0]
         confidence = round(float(prediction * 100), 2)
-
         result_label = "Proper" if prediction <= 0.5 else "Improper"
 
         results = pose.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
@@ -101,12 +89,11 @@ def analyze_image():
             "confidence": confidence,
             "skeleton_image": f"data:image/jpeg;base64,{encoded_image}"
         })
-
     except Exception as e:
+        print(f"❌ Error: {e}")
         return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
-    # app.run(debug=True, host="0.0.0.0", port=5000)
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=False, host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(debug=True, host="0.0.0.0", port=port)
