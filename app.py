@@ -31,7 +31,7 @@ class Attention(tf.keras.layers.Layer):
         return super(Attention, self).get_config()
 
 
-MODEL_PATH = "model1.keras"
+MODEL_PATH = "atp-aceguard.keras"
 model = None
 try:
     model = tf.keras.models.load_model(MODEL_PATH, custom_objects={"Attention": Attention})
@@ -48,8 +48,16 @@ def extract_pose_keypoints(img):
     try:
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = pose.process(img_rgb)
+        # if results.pose_landmarks:
+        #     return np.array([val for lm in results.pose_landmarks.landmark for val in (lm.x, lm.y, lm.z)])
         if results.pose_landmarks:
-            return np.array([val for lm in results.pose_landmarks.landmark for val in (lm.x, lm.y, lm.z)])
+            keypoints = np.array([val for lm in results.pose_landmarks.landmark for val in (lm.x, lm.y, lm.z)])
+
+            # Normalize keypoints using Min-Max Scaling
+            keypoints = (keypoints - np.min(keypoints)) / (np.max(keypoints) - np.min(keypoints) + 1e-6)
+
+            print(f"✅ Normalized Keypoints: {keypoints[:10]}")  # Debug
+            return keypoints
     except Exception as e:
         print(f"Error extracting keypoints: {e}")
     return None
@@ -75,8 +83,10 @@ def analyze_image():
         keypoints = keypoints.reshape(1, -1)
         prediction = model.predict(keypoints)[0][0]
         confidence = round(float(prediction * 100), 2)
-        result_label = "Proper" if prediction <= 0.5 else "Improper"
-
+        threshold = 0.55
+        result_label = "Proper" if prediction > threshold else "Improper"
+        print(prediction)
+        print(confidence)
         results = pose.process(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         if results.pose_landmarks:
             mp_drawing.draw_landmarks(img, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
